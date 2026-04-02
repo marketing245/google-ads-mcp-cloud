@@ -302,7 +302,8 @@ async function handle(name, a) {
       else if (a.target_roas) cfg.target_roas = { target_roas: a.target_roas };
       else cfg.maximize_clicks = {};
       const r = await customer.campaigns.create([cfg]);
-      return { success: true, message: `Search campaign "${a.name}" created (PAUSED)`, result: r };
+      const campaignResourceName = r.results?.[0]?.resource_name || r.results?.[0] || r;
+      return { success: true, message: `Search campaign "${a.name}" created (PAUSED)`, resource_name: campaignResourceName };
     }
     case "create_pmax_campaign": {
       const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), delivery_method: "STANDARD" }]);
@@ -311,7 +312,8 @@ async function handle(name, a) {
       else if (a.target_roas) cfg.maximize_conversion_value = { target_roas: a.target_roas };
       else cfg.maximize_conversions = {};
       const r = await customer.campaigns.create([cfg]);
-      return { success: true, message: `PMax campaign "${a.name}" created (PAUSED)`, result: r };
+      const campaignResourceName = r.results?.[0]?.resource_name || r.results?.[0] || r;
+      return { success: true, message: `PMax campaign "${a.name}" created (PAUSED)`, resource_name: campaignResourceName };
     }
     case "create_ad_group": {
       const r = await customer.adGroups.create([{ name: a.name, campaign: `customers/${cleanId}/campaigns/${a.campaign_id}`, status: "ENABLED", type: "SEARCH_STANDARD", cpc_bid_micros: a.cpc_bid ? mic(a.cpc_bid) : 1_000_000 }]);
@@ -320,8 +322,9 @@ async function handle(name, a) {
     case "create_responsive_search_ad": {
       if (a.headlines.length < 3 || a.headlines.length > 15) throw new Error("Need 3-15 headlines");
       if (a.descriptions.length < 2 || a.descriptions.length > 4) throw new Error("Need 2-4 descriptions");
-      const r = await customer.ads.create([{ ad_group: `customers/${cleanId}/adGroups/${a.ad_group_id}`, status: "ENABLED", ad: { responsive_search_ad: { headlines: a.headlines.map(h => ({ text: h })), descriptions: a.descriptions.map(d => ({ text: d })), path1: a.path1 || "", path2: a.path2 || "" }, final_urls: a.final_urls } }]);
-      return { success: true, message: "RSA created", result: r };
+      const r = await customer.adGroupAds.create([{ ad_group: `customers/${cleanId}/adGroups/${a.ad_group_id}`, status: "ENABLED", ad: { responsive_search_ad: { headlines: a.headlines.map(h => ({ text: h })), descriptions: a.descriptions.map(d => ({ text: d })), path1: a.path1 || "", path2: a.path2 || "" }, final_urls: a.final_urls } }]);
+      const adResourceName = r.results?.[0]?.resource_name || r.results?.[0] || r;
+      return { success: true, message: "RSA created", resource_name: adResourceName };
     }
     case "add_keywords": {
       const r = await customer.adGroupCriteria.create(a.keywords.map(k => ({ ad_group: `customers/${cleanId}/adGroups/${a.ad_group_id}`, keyword: { text: k.text, match_type: k.match_type }, status: "ENABLED" })));
