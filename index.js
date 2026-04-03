@@ -133,7 +133,7 @@ const READ_TOOLS = [
 ];
 
 const WRITE_TOOLS = [
-  t("create_search_campaign", "Create Search campaign (PAUSED)", { ...pCid, name: { type: "string" }, daily_budget: { type: "number" }, target_cpa: { type: "number" }, target_roas: { type: "number" } }, ["customer_id", "name", "daily_budget"]),
+  t("create_search_campaign", "Create Search campaign (PAUSED)", { ...pCid, name: { type: "string" }, daily_budget: { type: "number" }, bidding_strategy: { type: "string", enum: ["MAXIMIZE_CLICKS", "MAXIMIZE_CONVERSIONS", "TARGET_CPA", "TARGET_ROAS"], description: "Bidding strategy (default: MAXIMIZE_CONVERSIONS)" }, target_cpa: { type: "number", description: "Required if bidding_strategy is TARGET_CPA" }, target_roas: { type: "number", description: "Required if bidding_strategy is TARGET_ROAS" }, max_cpc_ceiling: { type: "number", description: "Max CPC ceiling for MAXIMIZE_CLICKS" } }, ["customer_id", "name", "daily_budget"]),
   t("create_pmax_campaign", "Create Performance Max campaign (PAUSED)", { ...pCid, name: { type: "string" }, daily_budget: { type: "number" }, final_url: { type: "string" }, target_cpa: { type: "number" }, target_roas: { type: "number" } }, ["customer_id", "name", "daily_budget", "final_url"]),
   t("create_ad_group", "Create ad group in a campaign", { ...pCid, ...pCamp, name: { type: "string" }, cpc_bid: { type: "number" } }, ["customer_id", "campaign_id", "name"]),
   t("create_responsive_search_ad", "Create RSA (3-15 headlines, 2-4 descriptions)", { ...pCid, ...pAg, headlines: { type: "array", items: { type: "string" } }, descriptions: { type: "array", items: { type: "string" } }, final_urls: { type: "array", items: { type: "string" } }, path1: { type: "string" }, path2: { type: "string" } }, ["customer_id", "ad_group_id", "headlines", "descriptions", "final_urls"]),
@@ -296,18 +296,22 @@ async function handle(name, a) {
       return { total: r.length, locations: r.map(x => ({ id: x.geo_target_constant?.id?.toString(), name: x.geo_target_constant?.name, country_code: x.geo_target_constant?.country_code, type: x.geo_target_constant?.target_type, full_name: x.geo_target_constant?.canonical_name })) };
     }
     case "create_search_campaign": {
-      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), delivery_method: "STANDARD" }]);
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: bud.results[0].resource_name, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false } };
-      if (a.target_cpa) cfg.target_cpa = { target_cpa_micros: mic(a.target_cpa) };
-      else if (a.target_roas) cfg.target_roas = { target_roas: a.target_roas };
-      else cfg.maximize_clicks = {};
+      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget) }]);
+      const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: budgetResource, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false } };
+      const strategy = (a.bidding_strategy || "MAXIMIZE_CONVERSIONS").toUpperCase();
+      if (strategy === "TARGET_CPA") { if (!a.target_cpa) throw new Error("target_cpa required for TARGET_CPA strategy"); cfg.target_cpa = { target_cpa_micros: mic(a.target_cpa) }; }
+      else if (strategy === "TARGET_ROAS") { if (!a.target_roas) throw new Error("target_roas required for TARGET_ROAS strategy"); cfg.target_roas = { target_roas: a.target_roas }; }
+      else if (strategy === "MAXIMIZE_CLICKS") cfg.maximize_clicks = a.max_cpc_ceiling ? { cpc_bid_ceiling_micros: mic(a.max_cpc_ceiling) } : {};
+      else cfg.maximize_conversions = a.target_cpa ? { target_cpa_micros: mic(a.target_cpa) } : {};
       const r = await customer.campaigns.create([cfg]);
       const campaignResourceName = r.results?.[0]?.resource_name || r.results?.[0] || r;
-      return { success: true, message: `Search campaign "${a.name}" created (PAUSED)`, resource_name: campaignResourceName };
+      return { success: true, message: `Search campaign "${a.name}" created (PAUSED) with ${strategy} bidding`, resource_name: campaignResourceName };
     }
     case "create_pmax_campaign": {
-      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), delivery_method: "STANDARD" }]);
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: bud.results[0].resource_name, url_expansion_opt_out: false };
+      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget) }]);
+      const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: budgetResource, url_expansion_opt_out: false };
       if (a.target_cpa) cfg.maximize_conversions = { target_cpa_micros: mic(a.target_cpa) };
       else if (a.target_roas) cfg.maximize_conversion_value = { target_roas: a.target_roas };
       else cfg.maximize_conversions = {};
@@ -422,7 +426,8 @@ function setupHandlers(srv) {
       const r = await handle(req.params.name, req.params.arguments || {});
       return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
     } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message || err}` }], isError: true };
+      const errMsg = err.message || (typeof err === 'object' ? JSON.stringify(err, null, 2) : String(err));
+      return { content: [{ type: "text", text: `Error: ${errMsg}` }], isError: true };
     }
   });
   return srv;
