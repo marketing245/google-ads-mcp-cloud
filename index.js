@@ -130,6 +130,7 @@ const READ_TOOLS = [
   t("run_gaql_query", "Run custom GAQL query", { ...pCid, query: { type: "string", description: "GAQL query" } }, ["customer_id", "query"]),
   t("get_location_targets", "Get current location targets (countries/cities) for a campaign", { ...pCid, ...pCamp }, ["customer_id", "campaign_id"]),
   t("search_geo_target", "Search for Google Ads geo target location IDs by name (country, city, state). Use this to find location criterion IDs before setting targets.", { ...pCid, location_name: { type: "string", description: "Location name to search (e.g. India, Mumbai, California)" } }, ["customer_id", "location_name"]),
+  t("get_undeclared_eu_campaigns", "Find campaigns missing EU political advertising declaration (blocks ALL API writes since April 2026)", { ...pCid }, ["customer_id"]),
 ];
 
 const WRITE_TOOLS = [
@@ -153,6 +154,7 @@ const WRITE_TOOLS = [
   t("add_sitelinks", "Add sitelink extensions to campaign", { ...pCid, ...pCamp, sitelinks: { type: "array", items: { type: "object", properties: { text: { type: "string" }, final_url: { type: "string" }, description1: { type: "string" }, description2: { type: "string" } }, required: ["text", "final_url"] } } }, ["customer_id", "campaign_id", "sitelinks"]),
   t("set_location_targets", "Set target locations (countries/cities) for a campaign. Use search_geo_target first to find location IDs.", { ...pCid, ...pCamp, locations: { type: "array", description: "Array of location targets", items: { type: "object", properties: { location_id: { type: "string", description: "Geo target criterion ID (e.g. 2356 for India, 1007768 for Mumbai)" }, bid_modifier: { type: "number", description: "Bid adjustment multiplier (e.g. 1.2 for +20%, 0.8 for -20%). Optional." } }, required: ["location_id"] } } }, ["customer_id", "campaign_id", "locations"]),
   t("remove_location_targets", "Remove location targets from a campaign", { ...pCid, ...pCamp, criterion_ids: { type: "array", description: "Array of criterion IDs to remove", items: { type: "string" } } }, ["customer_id", "campaign_id", "criterion_ids"]),
+  t("fix_eu_political_declaration", "Declare ALL undeclared campaigns as non-EU-political (REQUIRED since April 2026 - run this first if campaign creation fails)", { ...pCid }, ["customer_id"]),
 ];
 
 const ALL_TOOLS = [...READ_TOOLS, ...WRITE_TOOLS];
@@ -295,10 +297,15 @@ async function handle(name, a) {
       const r = await q(cid, `SELECT geo_target_constant.id, geo_target_constant.name, geo_target_constant.country_code, geo_target_constant.target_type, geo_target_constant.canonical_name, geo_target_constant.status FROM geo_target_constant WHERE geo_target_constant.name LIKE '%${a.location_name}%' AND geo_target_constant.status = 'ENABLED' LIMIT 20`);
       return { total: r.length, locations: r.map(x => ({ id: x.geo_target_constant?.id?.toString(), name: x.geo_target_constant?.name, country_code: x.geo_target_constant?.country_code, type: x.geo_target_constant?.target_type, full_name: x.geo_target_constant?.canonical_name })) };
     }
+    case "get_undeclared_eu_campaigns": {
+      const r = await q(cid, `SELECT campaign.id, campaign.name, campaign.status, campaign.contains_eu_political_advertising FROM campaign WHERE campaign.contains_eu_political_advertising = 'UNSPECIFIED' OR campaign.contains_eu_political_advertising = 'UNKNOWN'`);
+      const campaigns = r.map(x => ({ id: x.campaign?.id?.toString(), name: x.campaign?.name, status: x.campaign?.status, eu_declaration: x.campaign?.contains_eu_political_advertising }));
+      return { total: campaigns.length, message: campaigns.length > 0 ? "These campaigns are blocking ALL API writes. Use fix_eu_political_declaration to fix them." : "All campaigns are declared. No issues.", campaigns };
+    }
     case "create_search_campaign": {
       const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), explicitly_shared: false }]);
       const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: budgetResource, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false }, contains_eu_political_advertising: false };
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: budgetResource, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false }, contains_eu_political_advertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING" };
       const strategy = (a.bidding_strategy || "MAXIMIZE_CONVERSIONS").toUpperCase();
       if (strategy === "TARGET_CPA") { if (!a.target_cpa) throw new Error("target_cpa required for TARGET_CPA strategy"); cfg.target_cpa = { target_cpa_micros: mic(a.target_cpa) }; }
       else if (strategy === "TARGET_ROAS") { if (!a.target_roas) throw new Error("target_roas required for TARGET_ROAS strategy"); cfg.target_roas = { target_roas: a.target_roas }; }
@@ -311,7 +318,7 @@ async function handle(name, a) {
     case "create_pmax_campaign": {
       const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), explicitly_shared: false }]);
       const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: budgetResource, url_expansion_opt_out: false, contains_eu_political_advertising: false };
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: budgetResource, url_expansion_opt_out: false, contains_eu_political_advertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING" };
       if (a.target_cpa) cfg.maximize_conversions = { target_cpa_micros: mic(a.target_cpa) };
       else if (a.target_roas) cfg.maximize_conversion_value = { target_roas: a.target_roas };
       else cfg.maximize_conversions = {};
@@ -409,6 +416,13 @@ async function handle(name, a) {
       const assets = await customer.assets.create(a.sitelinks.map(s => ({ sitelink_asset: { link_text: s.text, description1: s.description1 || "", description2: s.description2 || "" }, final_urls: [s.final_url] })));
       const r = await customer.campaignAssets.create(assets.results.map(x => ({ campaign: `customers/${cleanId}/campaigns/${a.campaign_id}`, asset: x.resource_name, field_type: "SITELINK" })));
       return { success: true, message: `${a.sitelinks.length} sitelinks added`, result: r };
+    }
+    case "fix_eu_political_declaration": {
+      const r = await q(cid, `SELECT campaign.id, campaign.name, campaign.resource_name, campaign.contains_eu_political_advertising FROM campaign WHERE campaign.contains_eu_political_advertising = 'UNSPECIFIED' OR campaign.contains_eu_political_advertising = 'UNKNOWN'`);
+      if (r.length === 0) return { success: true, message: "All campaigns already declared. No fix needed.", fixed: 0 };
+      const updates = r.map(x => ({ resource_name: x.campaign?.resource_name, contains_eu_political_advertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING" }));
+      const result = await customer.campaigns.update(updates);
+      return { success: true, message: `Fixed ${r.length} undeclared campaigns. API writes should work now.`, fixed: r.length, campaigns: r.map(x => ({ id: x.campaign?.id?.toString(), name: x.campaign?.name })) };
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
