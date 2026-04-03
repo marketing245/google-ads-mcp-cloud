@@ -296,9 +296,9 @@ async function handle(name, a) {
       return { total: r.length, locations: r.map(x => ({ id: x.geo_target_constant?.id?.toString(), name: x.geo_target_constant?.name, country_code: x.geo_target_constant?.country_code, type: x.geo_target_constant?.target_type, full_name: x.geo_target_constant?.canonical_name })) };
     }
     case "create_search_campaign": {
-      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget) }]);
+      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), explicitly_shared: false }]);
       const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: budgetResource, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false } };
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "SEARCH", campaign_budget: budgetResource, network_settings: { target_google_search: true, target_search_network: true, target_content_network: false }, contains_eu_political_advertising: false };
       const strategy = (a.bidding_strategy || "MAXIMIZE_CONVERSIONS").toUpperCase();
       if (strategy === "TARGET_CPA") { if (!a.target_cpa) throw new Error("target_cpa required for TARGET_CPA strategy"); cfg.target_cpa = { target_cpa_micros: mic(a.target_cpa) }; }
       else if (strategy === "TARGET_ROAS") { if (!a.target_roas) throw new Error("target_roas required for TARGET_ROAS strategy"); cfg.target_roas = { target_roas: a.target_roas }; }
@@ -309,9 +309,9 @@ async function handle(name, a) {
       return { success: true, message: `Search campaign "${a.name}" created (PAUSED) with ${strategy} bidding`, resource_name: campaignResourceName };
     }
     case "create_pmax_campaign": {
-      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget) }]);
+      const bud = await customer.campaignBudgets.create([{ name: `${a.name} Budget`, amount_micros: mic(a.daily_budget), explicitly_shared: false }]);
       const budgetResource = bud.results?.[0]?.resource_name || bud.results?.[0];
-      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: budgetResource, url_expansion_opt_out: false };
+      const cfg = { name: a.name, status: "PAUSED", advertising_channel_type: "PERFORMANCE_MAX", campaign_budget: budgetResource, url_expansion_opt_out: false, contains_eu_political_advertising: false };
       if (a.target_cpa) cfg.maximize_conversions = { target_cpa_micros: mic(a.target_cpa) };
       else if (a.target_roas) cfg.maximize_conversion_value = { target_roas: a.target_roas };
       else cfg.maximize_conversions = {};
