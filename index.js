@@ -155,6 +155,10 @@ const WRITE_TOOLS = [
   t("set_location_targets", "Set target locations (countries/cities) for a campaign. Use search_geo_target first to find location IDs.", { ...pCid, ...pCamp, locations: { type: "array", description: "Array of location targets", items: { type: "object", properties: { location_id: { type: "string", description: "Geo target criterion ID (e.g. 2356 for India, 1007768 for Mumbai)" }, bid_modifier: { type: "number", description: "Bid adjustment multiplier (e.g. 1.2 for +20%, 0.8 for -20%). Optional." } }, required: ["location_id"] } } }, ["customer_id", "campaign_id", "locations"]),
   t("remove_location_targets", "Remove location targets from a campaign", { ...pCid, ...pCamp, criterion_ids: { type: "array", description: "Array of criterion IDs to remove", items: { type: "string" } } }, ["customer_id", "campaign_id", "criterion_ids"]),
   t("fix_eu_political_declaration", "Declare ALL undeclared campaigns as non-EU-political (REQUIRED since April 2026 - run this first if campaign creation fails)", { ...pCid }, ["customer_id"]),
+  t("add_callout_extensions", "Add callout extensions (short USP snippets) to campaign", { ...pCid, ...pCamp, callouts: { type: "array", description: "Array of callout texts (e.g. Free Shipping, 24/7 Support)", items: { type: "string" } } }, ["customer_id", "campaign_id", "callouts"]),
+  t("add_structured_snippets", "Add structured snippet extensions to campaign", { ...pCid, ...pCamp, header: { type: "string", description: "Snippet header (e.g. Brands, Styles, Types, Destinations, Courses, etc.)" }, values: { type: "array", description: "Array of snippet values", items: { type: "string" } } }, ["customer_id", "campaign_id", "header", "values"]),
+  t("add_promotion_extension", "Add promotion extension to campaign", { ...pCid, ...pCamp, occasion: { type: "string", description: "Promotion occasion (e.g. NEW_YEARS, VALENTINES_DAY, NONE)" }, discount_type: { type: "string", enum: ["MONETARY", "PERCENTAGE"], description: "Type of discount" }, discount_amount: { type: "number", description: "Discount value (e.g. 30 for 30% or 500 for Rs 500)" }, currency: { type: "string", description: "Currency code for MONETARY discount (e.g. INR, USD)" }, promotion_target: { type: "string", description: "What is being promoted (e.g. Women's Oversized Tees)" }, final_url: { type: "string" }, start_date: { type: "string", description: "Promo start YYYY-MM-DD" }, end_date: { type: "string", description: "Promo end YYYY-MM-DD" } }, ["customer_id", "campaign_id", "promotion_target", "final_url", "discount_type", "discount_amount"]),
+  t("add_business_name", "Set business name for campaign (shown in ads)", { ...pCid, ...pCamp, business_name: { type: "string" } }, ["customer_id", "campaign_id", "business_name"]),
 ];
 
 const ALL_TOOLS = [...READ_TOOLS, ...WRITE_TOOLS];
@@ -423,6 +427,31 @@ async function handle(name, a) {
       const updates = r.map(x => ({ resource_name: x.campaign?.resource_name, contains_eu_political_advertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING" }));
       const result = await customer.campaigns.update(updates);
       return { success: true, message: `Fixed ${r.length} undeclared campaigns. API writes should work now.`, fixed: r.length, campaigns: r.map(x => ({ id: x.campaign?.id?.toString(), name: x.campaign?.name })) };
+    }
+    case "add_callout_extensions": {
+      const assets = await customer.assets.create(a.callouts.map(text => ({ callout_asset: { callout_text: text } })));
+      const r = await customer.campaignAssets.create(assets.results.map(x => ({ campaign: `customers/${cleanId}/campaigns/${a.campaign_id}`, asset: x.resource_name, field_type: "CALLOUT" })));
+      return { success: true, message: `${a.callouts.length} callout extensions added`, callouts: a.callouts };
+    }
+    case "add_structured_snippets": {
+      const assets = await customer.assets.create([{ structured_snippet_asset: { header: a.header, values: a.values } }]);
+      const r = await customer.campaignAssets.create(assets.results.map(x => ({ campaign: `customers/${cleanId}/campaigns/${a.campaign_id}`, asset: x.resource_name, field_type: "STRUCTURED_SNIPPET" })));
+      return { success: true, message: `Structured snippet added with header "${a.header}" and ${a.values.length} values`, header: a.header, values: a.values };
+    }
+    case "add_promotion_extension": {
+      const promoAsset = { promotion_target: a.promotion_target, final_urls: [a.final_url] };
+      if (a.discount_type === "PERCENTAGE") { promoAsset.percent_off = a.discount_amount * 10000; }
+      else if (a.discount_type === "MONETARY") { promoAsset.money_amount_off = { amount_micros: mic(a.discount_amount), currency_code: a.currency || "INR" }; }
+      if (a.occasion && a.occasion !== "NONE") promoAsset.occasion = a.occasion;
+      if (a.start_date) promoAsset.start_date = a.start_date;
+      if (a.end_date) promoAsset.end_date = a.end_date;
+      const assets = await customer.assets.create([{ promotion_asset: promoAsset }]);
+      const r = await customer.campaignAssets.create(assets.results.map(x => ({ campaign: `customers/${cleanId}/campaigns/${a.campaign_id}`, asset: x.resource_name, field_type: "PROMOTION" })));
+      return { success: true, message: `Promotion extension added: ${a.discount_amount}${a.discount_type === "PERCENTAGE" ? "%" : " " + (a.currency || "INR")} off ${a.promotion_target}` };
+    }
+    case "add_business_name": {
+      const r = await customer.campaigns.update([{ resource_name: `customers/${cleanId}/campaigns/${a.campaign_id}`, business_name: a.business_name }]);
+      return { success: true, message: `Business name set to "${a.business_name}"` };
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
